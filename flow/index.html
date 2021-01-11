@@ -1,0 +1,205 @@
+
+<!doctype html>
+
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, user-scalable=yes">
+  <meta name="theme-color" content="#4F7DC9">
+  <meta charset="UTF-8">
+  <title></title>
+  <link rel="stylesheet" href="//fonts.googleapis.com/css?family=Source+Code+Pro:400|Roboto:400,300,400italic,500,700|Roboto+Mono">
+  <link rel="stylesheet" href="//fonts.googleapis.com/icon?family=Material+Icons">
+  <link rel="stylesheet" href="https://storage.googleapis.com/codelab-elements/codelab-elements.css">
+  <style>
+    .success {
+      color: #1e8e3e;
+    }
+    .error {
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <google-codelab-analytics gaid="UA-49880327-14"></google-codelab-analytics>
+  <google-codelab codelab-gaid=""
+                  id=""
+                  title=""
+                  environment="web"
+                  feedback-link="">
+    
+      <google-codelab-step label="Migrating from LiveData to Flow - ScoresDao" duration="0">
+        <p><br>Let&#39;s replace the return  type inside class  <code>ScoresDao </code></p>
+<p>From: </p>
+<pre><code>@Query(&#34;SELECT * FROM scores ORDER BY id DESC&#34;)
+fun getScores(): LiveData&lt;List&lt;Score&gt;&gt;</code></pre>
+<p>To:</p>
+<pre><code>@Query(&#34;SELECT * FROM scores ORDER BY id DESC&#34;)
+fun getScores(): Flow&lt;List&lt;Score&gt;&gt;</code></pre>
+<p>Lets add a new class(we will use it later):</p>
+<pre><code>class NewsException(message: String): Exception(message) {
+}</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Migrating from LiveData to Flow - NewsRepository" duration="0">
+        <p>Because <code>collect</code> operator require coroutine scop to run, let&#39;s create a local coroutine scope inside <code>NewsRepository</code> <br></p>
+<pre><code>private val scope = MainScope()</code></pre>
+<p><br>And we need to cancel this coroutine scop when exiting application, let&#39;s add cancel function inside <code>NewsRepository</code><br></p>
+<pre><code>fun cancelScope() {
+    scope.cancel()
+}
+</code></pre>
+<p>Let&#39;s start collecting score values at <code>init</code>:<br></p>
+<pre><code>init {
+    scope.launch {
+        scoresDao.getScores().collect { scores -&gt;
+            if(scores.isNotEmpty()) {
+                scoreValue = scores[0].score
+            }
+        }
+    }
+}
+</code></pre>
+<p><br>Now we will replace <code>getNewsData()</code> function with flow builder</p>
+<pre><code>un getNewsData(): Flow&lt;ArrayList&lt;News&gt;&gt; = flow {
+    while(currentCoroutineContext().isActive) {
+        val news = fetchNews()
+        if (news?.isNotEmpty() == true) {
+            emit(news)
+        } else {
+            throw NewsException(&#34;No news&#34;)
+        }
+        delay(10000)
+    }
+}
+</code></pre>
+<p>Let&#39;s change a <code>fetchNews()</code> function</p>
+<p>From:</p>
+<pre><code>suspend fun fetchNews() {
+    while(currentCoroutineContext().isActive) {
+        try {
+            fetchingStatus.postValue(FetchingStatus.FETCHING_IN_PROCESS)
+            val result = newsService.getTopStories()
+            val maxRange = min(result.size, 10)
+            val news = ArrayList&lt;News&gt;()
+            for(i in 0 until maxRange) {
+                val id = result[i]
+                val newsResponse = newsService.getNews(id)
+                if(newsResponse.score &gt;= scoreValue) {
+                    news.add(News(newsResponse.id, newsResponse.author, newsResponse.title, newsResponse.url, newsResponse.time, newsResponse.score))
+                }
+            }
+            Log.i(&#34;NewsRepository&#34;, &#34;News size: ${news.size}&#34;)
+            val random = (0..200).random()
+            scoresDao.insert(Score(random))
+            newsData.postValue(news)
+            fetchingStatus.postValue(FetchingStatus.FETCHING_SUCCEED)
+        }
+        catch (e: Exception) {
+            e.printStackTrace()
+            fetchingStatus.postValue(FetchingStatus.FETCHING_FAILED)
+        }
+        delay(10000)
+    }
+}
+
+</code></pre>
+<p>To:</p>
+<pre><code>private suspend fun fetchNews(): ArrayList&lt;News&gt;? {
+    try {
+        fetchingStatus.postValue(FetchingStatus.FETCHING_IN_PROCESS)
+        val result = newsService.getTopStories()
+        val maxRange = min(result.size, 10)
+        val news = ArrayList&lt;News&gt;()
+        for(i in 0 until maxRange) {
+            val id = result[i]
+            val newsResponse = newsService.getNews(id)
+            if(newsResponse.score &gt;= scoreValue) {
+                news.add(News(newsResponse.id, newsResponse.author, newsResponse.title, newsResponse.url, newsResponse.time, newsResponse.score))
+            }
+        }
+        Log.i(&#34;NewsRepository&#34;, &#34;News size: ${news.size}&#34;)
+        val random = (0..200).random()
+        scoresDao.insert(Score(random))
+        fetchingStatus.postValue(FetchingStatus.FETCHING_SUCCEED)
+        return news
+    }
+    catch (e: Exception) {
+        e.printStackTrace()
+        fetchingStatus.postValue(FetchingStatus.FETCHING_FAILED)
+        return null
+    }
+}
+
+</code></pre>
+<p>Now we can remove this lines:</p>
+<pre><code>private val newsData = MutableLiveData&lt;ArrayList&lt;News&gt;&gt;()</code></pre>
+<pre><code>fun getScore() = scoresDao.getScores()</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Migrating from LiveData to Flow - NewsViewModel" duration="0">
+        <p><br>We will add a new variable:</p>
+<pre><code>private val newsData = MutableLiveData&lt;ArrayList&lt;News&gt;&gt;()</code></pre>
+<p>Now we will change <code>getNews()</code> function</p>
+<p>From:</p>
+<pre><code>fun getNews() = newsRepository.getNewsData()</code></pre>
+<p>To:</p>
+<pre><code>fun getNews() = newsData</code></pre>
+<p>Now we will change <code>fetchNews()</code> function</p>
+<p>From:</p>
+<pre><code>fun fetchNews() {
+    viewModelScope.launch {
+        newsRepository.fetchNews()
+    }
+}
+</code></pre>
+<p>To:</p>
+<pre><code>fun fetchNews() {
+    viewModelScope.launch {
+        newsRepository.getNewsData()
+            .catch {
+                emit(ArrayList())
+            }
+            .collect {
+                newsData.postValue(it)
+            }
+    }
+}</code></pre>
+<p>Lets override <code>onCleared()</code> function inside and call <code>cancelScope()</code> in <code>NewsRepository</code></p>
+<pre><code>override fun onCleared() {
+    super.onCleared()
+    newsRepository.cancelScope()
+}</code></pre>
+<p>Now we can remove this functions:</p>
+<pre><code>fun getScores() = newsRepository.getScore()</code></pre>
+<pre><code>fun setScore(score: Int) {
+    newsRepository.setScore(score)
+}</code></pre>
+
+
+      </google-codelab-step>
+    
+      <google-codelab-step label="Migrating from LiveData to Flow - MainActivity" duration="0">
+        <p>Here we only need to remove <code>getScores()</code> observable</p>
+<pre><code>viewModel.getScores().observe(this, {scores -&gt;
+    if(scores.isNotEmpty()) {
+        viewModel.setScore(scores[0].score)
+    }
+})</code></pre>
+<p>Now lets run the application, and see that everything is working as expected.</p>
+
+
+      </google-codelab-step>
+    
+  </google-codelab>
+
+  <script src="https://storage.googleapis.com/codelab-elements/native-shim.js"></script>
+  <script src="https://storage.googleapis.com/codelab-elements/custom-elements.min.js"></script>
+  <script src="https://storage.googleapis.com/codelab-elements/prettify.js"></script>
+  <script src="https://storage.googleapis.com/codelab-elements/codelab-elements.js"></script>
+
+</body>
+</html>
